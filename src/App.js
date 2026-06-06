@@ -242,7 +242,6 @@ const inRange = (ds, from, to) => {
 // ─── Styles ────────────────────────────────────────────────────────
 const ACCENT = "#1565C0"; // blue theme for dry-clean
 const ACCENT_LIGHT = "#E3F0FF";
-const ACCENT_MID = "#1976D2";
 
 const S = {
   app: {
