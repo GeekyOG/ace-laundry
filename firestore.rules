@@ -1,0 +1,71 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Bootstrap admin allowlist — the only email(s) allowed to self-register
+    // as the very first admin via the "first-time setup" screen. Add more
+    // emails here if there will be more than one owner/admin account.
+    function isBootstrapAdminEmail() {
+      return request.auth.token.email in ['ejiro561@gmail.com'];
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function profile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActive() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && profile().active == true;
+    }
+
+    function isAdmin() {
+      return isActive() && profile().role == 'admin';
+    }
+
+    function isWorker() {
+      return isActive() && profile().role == 'worker';
+    }
+
+    function canEditJobs() {
+      return isAdmin() || (isWorker() && profile().canEditJobs == true);
+    }
+
+    match /users/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if isSignedIn() && (
+        (isAdmin() && request.resource.data.role == 'worker')
+        || (request.auth.uid == uid
+            && request.resource.data.role == 'admin'
+            && isBootstrapAdminEmail())
+      );
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /jobs/{jobId} {
+      allow read: if isActive();
+      allow create: if isActive() && canEditJobs()
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isActive() && canEditJobs();
+      allow delete: if isAdmin();
+    }
+
+    match /jobFinancials/{jobId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /transactions/{txId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /notifications/{notifId} {
+      allow read, update, delete: if isAdmin();
+      allow create: if isActive() && request.resource.data.workerUid == request.auth.uid;
+    }
+  }
+}

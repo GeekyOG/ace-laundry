@@ -19,6 +19,8 @@ import {
   BarChart2,
   Droplets,
   CheckCircle2,
+  Printer,
+  LogOut,
 } from "lucide-react";
 import { Bar } from "react-chartjs-2";
 import {
@@ -30,6 +32,36 @@ import {
   Tooltip,
   Legend,
 } from "chart.js";
+import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  orderBy,
+  writeBatch,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  serverTimestamp,
+} from "firebase/firestore";
+import { db } from "./firebase";
+import { useAuth } from "./contexts/AuthContext";
+import Login from "./components/Login";
+import ManageWorkers from "./components/ManageWorkers";
+import NotificationsPanel from "./components/NotificationsPanel";
+import ReceiptView from "./components/ReceiptView";
+import { S, ACCENT, ACCENT_LIGHT } from "./styles";
+import {
+  uid,
+  today,
+  fmt,
+  SERVICE_TYPES,
+  ITEM_CATALOGUE,
+  totalExtraCosts,
+  jobProfit,
+  inRange,
+  getPresetRange,
+} from "./utils";
 
 ChartJS.register(
   CategoryScale,
@@ -39,504 +71,6 @@ ChartJS.register(
   Tooltip,
   Legend,
 );
-
-// ─── Storage ───────────────────────────────────────────────────────
-const JOBS_KEY = "dc_jobs";
-const TX_KEY = "dc_tx";
-const load = (k) => {
-  try {
-    return JSON.parse(localStorage.getItem(k) || "[]");
-  } catch {
-    return [];
-  }
-};
-const persist = (k, d) => localStorage.setItem(k, JSON.stringify(d));
-const uid = () =>
-  Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-const today = () => new Date().toISOString().split("T")[0];
-const fmt = (n) =>
-  "₦" +
-  (parseFloat(n) || 0).toLocaleString("en-NG", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  });
-
-// ─── Service types & item catalogue ───────────────────────────────
-const SERVICE_TYPES = [
-  "Dry Clean",
-  "Wash & Iron",
-  "Iron Only",
-  "Starch & Iron",
-  "Wash Only",
-  "Leather Clean",
-  "Alteration",
-];
-const ITEM_CATALOGUE = [
-  "Suit (2-piece)",
-  "Suit (3-piece)",
-  "Blazer",
-  "Trousers",
-  "Shirt",
-  "Blouse",
-  "Gown / Dress",
-  "Agbada",
-  "Senator / Kaftan",
-  "Ankara Outfit",
-  "Jeans",
-  "Skirt",
-  "Jacket / Coat",
-  "Tie",
-  "Bedsheet",
-  "Duvet / Blanket",
-  "Curtain (per panel)",
-  "Towel",
-  "Cap / Hat",
-  "Bag",
-  "Sneakers / Shoes",
-  "Other",
-];
-
-// ─── Profit helpers ────────────────────────────────────────────────
-const totalExtraCosts = (job) =>
-  (job.extraCosts || []).reduce((s, c) => s + (parseFloat(c.value) || 0), 0);
-const jobProfit = (job) =>
-  (parseFloat(job.price) || 0) -
-  (parseFloat(job.supplyCost) || 0) -
-  totalExtraCosts(job);
-
-// ─── Seed Data ─────────────────────────────────────────────────────
-const SEED_JOBS = [];
-
-const SEED_TX = [];
-
-// ─── Date Helpers ──────────────────────────────────────────────────
-const getPresetRange = (preset) => {
-  const now = new Date();
-  const y = now.getFullYear(),
-    mo = now.getMonth(),
-    d = now.getDate();
-  if (preset === "today") {
-    const t = today();
-    return { from: t, to: t };
-  }
-  if (preset === "week") {
-    const day = now.getDay();
-    const mon = new Date(y, mo, d - (day === 0 ? 6 : day - 1));
-    const sun = new Date(mon);
-    sun.setDate(mon.getDate() + 6);
-    return {
-      from: mon.toISOString().split("T")[0],
-      to: sun.toISOString().split("T")[0],
-    };
-  }
-  if (preset === "month")
-    return {
-      from: new Date(y, mo, 1).toISOString().split("T")[0],
-      to: new Date(y, mo + 1, 0).toISOString().split("T")[0],
-    };
-  if (preset === "last30") {
-    const f = new Date(y, mo, d - 29);
-    return { from: f.toISOString().split("T")[0], to: today() };
-  }
-  return { from: "", to: "" };
-};
-const inRange = (ds, from, to) => {
-  if (!from && !to) return true;
-  if (!ds) return false;
-  if (from && ds < from) return false;
-  if (to && ds > to) return false;
-  return true;
-};
-
-// ─── Styles ────────────────────────────────────────────────────────
-const ACCENT = "#1565C0"; // blue theme for dry-clean
-const ACCENT_LIGHT = "#E3F0FF";
-
-const S = {
-  app: {
-    fontFamily: "'Georgia', serif",
-    background: "#F5F8FF",
-    minHeight: "100vh",
-    color: "#1A1A1A",
-    maxWidth: 480,
-    margin: "0 auto",
-  },
-  nav: {
-    position: "sticky",
-    top: 0,
-    zIndex: 100,
-    background: "#0D1F3C",
-    borderBottom: `2px solid ${ACCENT}`,
-    display: "flex",
-    alignItems: "center",
-    padding: "0 16px",
-  },
-  navBrand: {
-    color: "#90CAF9",
-    fontSize: 15,
-    fontWeight: "bold",
-    letterSpacing: 0.5,
-    padding: "13px 0",
-    marginRight: "auto",
-    lineHeight: 1.2,
-    display: "flex",
-    alignItems: "center",
-    gap: 7,
-  },
-  navBrandSub: {
-    color: "rgba(255,255,255,0.45)",
-    fontSize: 10,
-    fontFamily: "sans-serif",
-    letterSpacing: 1,
-    fontWeight: "normal",
-    display: "block",
-    marginTop: 1,
-  },
-  navTab: (a) => ({
-    color: a ? "#90CAF9" : "rgba(255,255,255,0.4)",
-    fontSize: 12,
-    fontFamily: "sans-serif",
-    padding: "14px 12px",
-    cursor: "pointer",
-    border: "none",
-    background: "none",
-    borderBottom: a ? `2px solid #90CAF9` : "2px solid transparent",
-    marginBottom: -2,
-    letterSpacing: 0.5,
-    whiteSpace: "nowrap",
-  }),
-  offlineBar: {
-    background: ACCENT_LIGHT,
-    borderBottom: `1px solid rgba(21,101,192,0.3)`,
-    padding: "6px 16px",
-    fontFamily: "sans-serif",
-    fontSize: 11,
-    color: ACCENT,
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    justifyContent: "center",
-  },
-  page: { padding: 16 },
-  metricsGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(2,minmax(0,1fr))",
-    gap: 10,
-    marginBottom: 16,
-  },
-  metric: (v) => {
-    const bg =
-      {
-        blue: ACCENT_LIGHT,
-        green: "#EAF5EE",
-        danger: "#FDECEA",
-        default: "#FFFFFF",
-      }[v] || "#FFFFFF";
-    const bdr =
-      {
-        blue: "rgba(21,101,192,0.2)",
-        green: "rgba(45,125,70,0.2)",
-        danger: "rgba(192,57,43,0.2)",
-        default: "rgba(0,0,0,0.08)",
-      }[v] || "rgba(0,0,0,0.08)";
-    return {
-      background: bg,
-      border: `0.5px solid ${bdr}`,
-      borderRadius: 10,
-      padding: "12px 14px",
-    };
-  },
-  metricLabel: {
-    fontSize: 10,
-    fontFamily: "sans-serif",
-    color: "#6B6B6B",
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-    marginBottom: 4,
-    display: "flex",
-    alignItems: "center",
-    gap: 4,
-  },
-  metricValue: (v) => ({
-    fontSize: 19,
-    fontWeight: "bold",
-    color:
-      { blue: ACCENT, green: "#2D7D46", danger: "#C0392B", default: "#1A1A1A" }[
-        v
-      ] || "#1A1A1A",
-    letterSpacing: -0.5,
-  }),
-  metricSub: {
-    fontSize: 10,
-    fontFamily: "sans-serif",
-    color: "#6B6B6B",
-    marginTop: 2,
-  },
-  secHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 14,
-  },
-  secTitle: { fontSize: 17, color: "#1A1A1A", letterSpacing: -0.3 },
-  btnPrimary: {
-    background: "#0D1F3C",
-    color: "#90CAF9",
-    border: "none",
-    padding: "8px 14px",
-    borderRadius: 10,
-    fontSize: 12,
-    fontFamily: "sans-serif",
-    cursor: "pointer",
-    display: "flex",
-    alignItems: "center",
-    gap: 5,
-    letterSpacing: 0.3,
-  },
-  btnSm: { padding: "6px 10px", fontSize: 11, borderRadius: 8 },
-  btnDanger: {
-    background: "#FDECEA",
-    color: "#C0392B",
-    border: "1px solid rgba(192,57,43,0.2)",
-  },
-  btnCancel: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 10,
-    fontFamily: "sans-serif",
-    fontSize: 13,
-    cursor: "pointer",
-    border: "1px solid rgba(0,0,0,0.12)",
-    background: "#F5F8FF",
-    color: "#6B6B6B",
-    fontWeight: 500,
-  },
-  btnSave: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 10,
-    fontFamily: "sans-serif",
-    fontSize: 13,
-    cursor: "pointer",
-    border: "none",
-    background: "#0D1F3C",
-    color: "#90CAF9",
-    fontWeight: 500,
-  },
-  card: {
-    background: "#FFFFFF",
-    border: "0.5px solid rgba(0,0,0,0.08)",
-    borderRadius: 14,
-    padding: "14px 16px",
-    marginBottom: 10,
-  },
-  cardName: { fontSize: 15, fontWeight: "bold", color: "#1A1A1A" },
-  cardSub: {
-    fontSize: 12,
-    fontFamily: "sans-serif",
-    color: "#6B6B6B",
-    marginTop: 1,
-  },
-  cardMeta: {
-    display: "grid",
-    gridTemplateColumns: "repeat(2,minmax(0,1fr))",
-    gap: 6,
-    marginTop: 10,
-  },
-  metaItem: { fontFamily: "sans-serif", fontSize: 11 },
-  metaLabel: { color: "#6B6B6B", marginBottom: 1 },
-  metaVal: { color: "#1A1A1A", fontWeight: 500 },
-  cardActions: {
-    display: "flex",
-    gap: 6,
-    marginTop: 12,
-    paddingTop: 10,
-    borderTop: "0.5px solid rgba(0,0,0,0.08)",
-  },
-  badge: (variant) => {
-    const map = {
-      Pending: { bg: "#FFF3CD", color: "#856404" },
-      "In Progress": { bg: "#E3F0FF", color: "#1565C0" },
-      Ready: { bg: "#E8F5E9", color: "#2E7D32" },
-      Collected: { bg: "#EAF5EE", color: "#2D7D46" },
-      paid: { bg: "#EAF5EE", color: "#2D7D46" },
-      partial: { bg: "#FFF3CD", color: "#856404" },
-      unpaid: { bg: "#FDECEA", color: "#C0392B" },
-      pickup: { bg: "#F3E5F5", color: "#7B1FA2" },
-      delivery: { bg: "#E3F0FF", color: "#1565C0" },
-    };
-    const v = map[variant] || { bg: "#F1F3F5", color: "#555" };
-    return {
-      display: "inline-flex",
-      alignItems: "center",
-      gap: 4,
-      fontFamily: "sans-serif",
-      fontSize: 10,
-      padding: "3px 8px",
-      borderRadius: 20,
-      fontWeight: 600,
-      letterSpacing: 0.3,
-      textTransform: "uppercase",
-      whiteSpace: "nowrap",
-      background: v.bg,
-      color: v.color,
-    };
-  },
-  searchWrap: { position: "relative", marginBottom: 12 },
-  searchInput: {
-    width: "100%",
-    paddingLeft: 34,
-    paddingRight: 12,
-    paddingTop: 10,
-    paddingBottom: 10,
-    border: "1px solid rgba(0,0,0,0.15)",
-    borderRadius: 10,
-    fontSize: 13,
-    fontFamily: "sans-serif",
-    color: "#1A1A1A",
-    background: "#fff",
-    outline: "none",
-    boxSizing: "border-box",
-  },
-  searchIconWrap: {
-    position: "absolute",
-    left: 10,
-    top: "50%",
-    transform: "translateY(-50%)",
-    color: "#9B9B9B",
-    display: "flex",
-  },
-  filterRow: {
-    display: "flex",
-    gap: 6,
-    marginBottom: 14,
-    overflowX: "auto",
-    paddingBottom: 4,
-  },
-  chip: (a) => ({
-    fontFamily: "sans-serif",
-    fontSize: 11,
-    padding: "5px 12px",
-    borderRadius: 20,
-    border: a ? `1px solid ${ACCENT}` : "1px solid rgba(0,0,0,0.12)",
-    background: a ? ACCENT_LIGHT : "#fff",
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-    color: a ? ACCENT : "#6B6B6B",
-    letterSpacing: 0.3,
-    fontWeight: a ? 600 : 400,
-  }),
-  divider: {
-    fontFamily: "sans-serif",
-    fontSize: 10,
-    textTransform: "uppercase",
-    letterSpacing: 1,
-    color: "#6B6B6B",
-    margin: "16px 0 8px",
-    paddingBottom: 4,
-    borderBottom: "0.5px solid rgba(0,0,0,0.08)",
-  },
-  overlay: {
-    position: "fixed",
-    inset: 0,
-    background: "rgba(0,0,0,0.55)",
-    zIndex: 200,
-    display: "flex",
-    alignItems: "flex-end",
-    justifyContent: "center",
-  },
-  modal: {
-    background: "#fff",
-    borderRadius: "14px 14px 0 0",
-    width: "100%",
-    maxWidth: 480,
-    maxHeight: "92vh",
-    overflowY: "auto",
-    padding: "20px 18px 30px",
-  },
-  modalTitle: {
-    fontSize: 17,
-    fontWeight: "bold",
-    color: "#1A1A1A",
-    marginBottom: 16,
-    paddingBottom: 12,
-    borderBottom: "0.5px solid rgba(0,0,0,0.08)",
-  },
-  formGroup: { marginBottom: 14 },
-  formRow: {
-    display: "grid",
-    gridTemplateColumns: "repeat(2,minmax(0,1fr))",
-    gap: 10,
-  },
-  label: {
-    fontFamily: "sans-serif",
-    fontSize: 11,
-    color: "#6B6B6B",
-    display: "block",
-    marginBottom: 5,
-    letterSpacing: 0.3,
-    textTransform: "uppercase",
-  },
-  input: {
-    width: "100%",
-    border: "1px solid rgba(0,0,0,0.15)",
-    borderRadius: 10,
-    padding: "10px 12px",
-    fontSize: 14,
-    fontFamily: "sans-serif",
-    color: "#1A1A1A",
-    background: "#fff",
-    outline: "none",
-    boxSizing: "border-box",
-  },
-  textarea: {
-    width: "100%",
-    border: "1px solid rgba(0,0,0,0.15)",
-    borderRadius: 10,
-    padding: "10px 12px",
-    fontSize: 14,
-    fontFamily: "sans-serif",
-    color: "#1A1A1A",
-    background: "#fff",
-    outline: "none",
-    resize: "vertical",
-    minHeight: 70,
-    boxSizing: "border-box",
-  },
-  select: {
-    width: "100%",
-    border: "1px solid rgba(0,0,0,0.15)",
-    borderRadius: 10,
-    padding: "10px 12px",
-    fontSize: 14,
-    fontFamily: "sans-serif",
-    color: "#1A1A1A",
-    background: "#fff",
-    outline: "none",
-    boxSizing: "border-box",
-  },
-  modalActions: { display: "flex", gap: 8, marginTop: 18 },
-  txAmount: (t) => ({
-    fontFamily: "sans-serif",
-    fontSize: 14,
-    fontWeight: 600,
-    color: t === "income" ? "#2D7D46" : "#C0392B",
-  }),
-  chartWrap: {
-    background: "#fff",
-    border: "0.5px solid rgba(0,0,0,0.08)",
-    borderRadius: 14,
-    padding: "14px 16px",
-    marginBottom: 14,
-  },
-  empty: {
-    textAlign: "center",
-    padding: "40px 20px",
-    color: "#9B9B9B",
-    fontFamily: "sans-serif",
-    fontSize: 13,
-  },
-};
 
 // ─── Date Filter ───────────────────────────────────────────────────
 const PRESETS = [
@@ -1010,6 +544,7 @@ function ItemsEditor({ items, setItems }) {
         qty: 1,
         unitPrice: 0,
         deliveredQty: 0,
+        note: "",
       },
     ]);
   const removeItem = (id) =>
@@ -1168,11 +703,22 @@ function ItemsEditor({ items, setItems }) {
                   color: "#9B9B9B",
                   textAlign: "right",
                   paddingRight: 38,
+                  marginBottom: 4,
                 }}
               >
                 {it.qty} × {fmt(it.unitPrice)} = {fmt(lineTotal)}
               </div>
             )}
+            <input
+              value={it.note || ""}
+              onChange={(e) => updateItem(it.id, "note", e.target.value)}
+              placeholder="Special request for this item, e.g. extra starch, stain on collar"
+              style={{
+                ...S.input,
+                fontSize: 12,
+                padding: "6px 10px",
+              }}
+            />
           </div>
         );
       })}
@@ -1197,12 +743,15 @@ const BLANK_JOB = {
   notes: "",
 };
 
-function JobModal({ job, onClose, onSave }) {
+function JobModal({ job, financials, onClose, onSave }) {
+  const { role } = useAuth();
+  const isAdmin = role === "admin";
   const [form, setForm] = useState(() => ({
     ...BLANK_JOB,
     ...(job || {}),
-    items: (job?.items || []).map((i) => ({ ...i })),
-    extraCosts: (job?.extraCosts || []).map((c) => ({ ...c })),
+    ...(financials || {}),
+    items: (job?.items || []).map((i) => ({ ...i, note: i.note || "" })),
+    extraCosts: (financials?.extraCosts || []).map((c) => ({ ...c })),
   }));
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -1388,7 +937,9 @@ function JobModal({ job, onClose, onSave }) {
           </div>
         </div>
 
-        {/* Costs */}
+        {/* Costs — admin only: workers never see or submit internal costs */}
+        {isAdmin && (
+          <>
         <div style={S.divider}>Costs</div>
         <div style={S.formGroup}>
           <label style={S.label}>Supply / Chemical Cost (₦)</label>
@@ -1535,6 +1086,8 @@ function JobModal({ job, onClose, onSave }) {
             </div>
           </div>
         </div>
+          </>
+        )}
 
         <div style={S.modalActions}>
           <button style={S.btnCancel} onClick={onClose}>
@@ -1550,7 +1103,9 @@ function JobModal({ job, onClose, onSave }) {
 }
 
 // ─── View Modal ────────────────────────────────────────────────────
-function ViewModal({ job, onClose, onEdit, onSave }) {
+function ViewModal({ job, financials, onClose, onEdit, onSave, onPrint }) {
+  const { role, canEditJobs } = useAuth();
+  const isAdmin = role === "admin";
   const [items, setItems] = useState(() =>
     (job.items || []).map((i) => ({ ...i })),
   );
@@ -1572,10 +1127,10 @@ function ViewModal({ job, onClose, onEdit, onSave }) {
   );
 
   const bal = (parseFloat(job.price) || 0) - (parseFloat(job.deposit) || 0);
-  const extraCosts = job.extraCosts || [];
-  const extraTotal = totalExtraCosts(job);
-  const allCosts = (parseFloat(job.supplyCost) || 0) + extraTotal;
-  const profit = jobProfit(job);
+  const extraCosts = financials?.extraCosts || [];
+  const extraTotal = totalExtraCosts(financials);
+  const allCosts = (parseFloat(financials?.supplyCost) || 0) + extraTotal;
+  const profit = jobProfit(job, financials);
   const totalPieces = items.reduce((s, i) => s + (parseInt(i.qty) || 0), 0);
   return (
     <div
@@ -1707,6 +1262,19 @@ function ViewModal({ job, onClose, onEdit, onSave }) {
                       {fmt((parseFloat(it.unitPrice) || 0) * totalQty)}
                     </div>
                   )}
+                  {it.note && (
+                    <div
+                      style={{
+                        fontFamily: "sans-serif",
+                        fontSize: 10,
+                        color: ACCENT,
+                        marginTop: 2,
+                        fontStyle: "italic",
+                      }}
+                    >
+                      Note: {it.note}
+                    </div>
+                  )}
                 </div>
                 <div
                   style={{
@@ -1718,7 +1286,7 @@ function ViewModal({ job, onClose, onEdit, onSave }) {
                 >
                   <button
                     onClick={() => stepDelivered(it.id, -1)}
-                    disabled={dqty <= 0}
+                    disabled={dqty <= 0 || !canEditJobs}
                     style={{
                       width: 26,
                       height: 26,
@@ -1751,7 +1319,7 @@ function ViewModal({ job, onClose, onEdit, onSave }) {
                   </span>
                   <button
                     onClick={() => stepDelivered(it.id, 1)}
-                    disabled={dqty >= totalQty}
+                    disabled={dqty >= totalQty || !canEditJobs}
                     style={{
                       width: 26,
                       height: 26,
@@ -1798,7 +1366,7 @@ function ViewModal({ job, onClose, onEdit, onSave }) {
             ["Total Price", fmt(job.price), null],
             ["Deposit", fmt(job.deposit), null],
             ["Balance Due", fmt(bal), bal > 0 ? "#C0392B" : "#2D7D46"],
-            ["Supply Cost", fmt(job.supplyCost), null],
+            ...(isAdmin ? [["Supply Cost", fmt(financials?.supplyCost), null]] : []),
           ].map(([l, v, c]) => (
             <div key={l} style={S.metaItem}>
               <div style={S.metaLabel}>{l}</div>
@@ -1809,7 +1377,7 @@ function ViewModal({ job, onClose, onEdit, onSave }) {
           ))}
         </div>
 
-        {extraCosts.length > 0 && (
+        {isAdmin && extraCosts.length > 0 && (
           <>
             <div
               style={{
@@ -1905,47 +1473,63 @@ function ViewModal({ job, onClose, onEdit, onSave }) {
           </>
         )}
 
-        <div
-          style={{
-            background: profit >= 0 ? "#EAF5EE" : "#FDECEA",
-            border: `0.5px solid ${profit >= 0 ? "rgba(45,125,70,0.2)" : "rgba(192,57,43,0.2)"}`,
-            borderRadius: 10,
-            padding: "12px 14px",
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 8,
-            marginBottom: 4,
-          }}
-        >
-          <div style={{ fontFamily: "sans-serif", fontSize: 11 }}>
-            <div style={{ color: "#6B6B6B", marginBottom: 3 }}>Total costs</div>
-            <div style={{ fontWeight: 600, fontSize: 14, color: "#C0392B" }}>
-              {fmt(allCosts)}
+        {isAdmin && (
+          <div
+            style={{
+              background: profit >= 0 ? "#EAF5EE" : "#FDECEA",
+              border: `0.5px solid ${profit >= 0 ? "rgba(45,125,70,0.2)" : "rgba(192,57,43,0.2)"}`,
+              borderRadius: 10,
+              padding: "12px 14px",
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 8,
+              marginBottom: 4,
+            }}
+          >
+            <div style={{ fontFamily: "sans-serif", fontSize: 11 }}>
+              <div style={{ color: "#6B6B6B", marginBottom: 3 }}>Total costs</div>
+              <div style={{ fontWeight: 600, fontSize: 14, color: "#C0392B" }}>
+                {fmt(allCosts)}
+              </div>
+            </div>
+            <div style={{ fontFamily: "sans-serif", fontSize: 11 }}>
+              <div style={{ color: "#6B6B6B", marginBottom: 3 }}>
+                Estimated profit
+              </div>
+              <div
+                style={{
+                  fontWeight: 700,
+                  fontSize: 18,
+                  color: profit >= 0 ? "#2D7D46" : "#C0392B",
+                }}
+              >
+                {fmt(profit)}
+              </div>
             </div>
           </div>
-          <div style={{ fontFamily: "sans-serif", fontSize: 11 }}>
-            <div style={{ color: "#6B6B6B", marginBottom: 3 }}>
-              Estimated profit
-            </div>
-            <div
-              style={{
-                fontWeight: 700,
-                fontSize: 18,
-                color: profit >= 0 ? "#2D7D46" : "#C0392B",
-              }}
-            >
-              {fmt(profit)}
-            </div>
-          </div>
-        </div>
+        )}
 
         <div style={S.modalActions}>
           <button style={S.btnCancel} onClick={onClose}>
             Close
           </button>
-          <button style={S.btnSave} onClick={onEdit}>
-            Edit Job
+          <button
+            style={{
+              ...S.btnCancel,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 4,
+            }}
+            onClick={() => onPrint(job)}
+          >
+            <Printer size={13} /> Receipt
           </button>
+          {onEdit && (
+            <button style={S.btnSave} onClick={onEdit}>
+              Edit Job
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -2048,9 +1632,7 @@ function TxModal({ onClose, onSave }) {
               }
               onSave({
                 ...form,
-                id: uid(),
                 amount: parseFloat(form.amount) || 0,
-                created: Date.now(),
               });
             }}
           >
@@ -2063,11 +1645,11 @@ function TxModal({ onClose, onSave }) {
 }
 
 // ─── Jobs Page ─────────────────────────────────────────────────────
-function JobsPage() {
-  const [jobs, setJobs] = useState(() => {
-    const d = load(JOBS_KEY);
-    return d.length ? d : SEED_JOBS;
-  });
+function JobsPage({ onPrintReceipt }) {
+  const { user, role, canEditJobs } = useAuth();
+  const isAdmin = role === "admin";
+  const [jobs, setJobs] = useState([]);
+  const [financialsMap, setFinancialsMap] = useState({});
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
@@ -2076,39 +1658,116 @@ function JobsPage() {
   const [dateField, setDateField] = useState("due");
 
   useEffect(() => {
-    persist(JOBS_KEY, jobs);
-  }, [jobs]);
-
-  const saveJob = useCallback((form) => {
-    setJobs((prev) => {
-      if (form.id) return prev.map((j) => (j.id === form.id ? { ...form } : j));
-      return [{ ...form, id: uid(), created: Date.now() }, ...prev];
-    });
-    setModal(null);
-  }, []);
-
-  const saveJobItems = useCallback((updatedJob) => {
-    setJobs((prev) =>
-      prev.map((j) => (j.id === updatedJob.id ? updatedJob : j)),
+    const q = query(collection(db, "jobs"), orderBy("createdAt", "desc"));
+    return onSnapshot(q, (snap) =>
+      setJobs(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
     );
-    setViewing(updatedJob);
   }, []);
 
-  const deleteJob = (id) => {
-    if (window.confirm("Delete this job?"))
-      setJobs((prev) => prev.filter((j) => j.id !== id));
+  useEffect(() => {
+    if (!isAdmin) {
+      setFinancialsMap({});
+      return;
+    }
+    return onSnapshot(collection(db, "jobFinancials"), (snap) => {
+      const map = {};
+      snap.docs.forEach((d) => (map[d.id] = d.data()));
+      setFinancialsMap(map);
+    });
+  }, [isAdmin]);
+
+  const notifyAdmin = useCallback(
+    async (jobId, jobName, type) => {
+      await addDoc(collection(db, "notifications"), {
+        type,
+        jobId,
+        jobName,
+        workerUid: user.uid,
+        workerEmail: user.email,
+        message: `${user.email} ${type === "job_created" ? "added a new job for" : "updated the job for"} ${jobName}`,
+        createdAt: serverTimestamp(),
+        read: false,
+      });
+    },
+    [user],
+  );
+
+  const saveJob = useCallback(
+    async (form) => {
+      const isNew = !form.id;
+      const jobRef = form.id
+        ? doc(db, "jobs", form.id)
+        : doc(collection(db, "jobs"));
+      const finRef = doc(db, "jobFinancials", jobRef.id);
+      const { supplyCost, extraCosts, id, ...jobData } = form;
+
+      const batch = writeBatch(db);
+      batch.set(
+        jobRef,
+        {
+          ...jobData,
+          updatedAt: serverTimestamp(),
+          updatedBy: user.uid,
+          ...(isNew
+            ? {
+                createdAt: serverTimestamp(),
+                createdBy: user.uid,
+                createdByEmail: user.email,
+              }
+            : {}),
+        },
+        { merge: true },
+      );
+      if (isAdmin) {
+        batch.set(
+          finRef,
+          {
+            supplyCost: parseFloat(supplyCost) || 0,
+            extraCosts: extraCosts || [],
+            updatedAt: serverTimestamp(),
+            updatedBy: user.uid,
+          },
+          { merge: true },
+        );
+      }
+      await batch.commit();
+      if (!isAdmin) {
+        await notifyAdmin(jobRef.id, form.name, isNew ? "job_created" : "job_updated");
+      }
+      setModal(null);
+    },
+    [isAdmin, user, notifyAdmin],
+  );
+
+  const saveJobItems = useCallback(
+    async (updatedJob) => {
+      await updateDoc(doc(db, "jobs", updatedJob.id), {
+        items: updatedJob.items,
+        updatedAt: serverTimestamp(),
+        updatedBy: user.uid,
+      });
+      setViewing(updatedJob);
+      if (!isAdmin) await notifyAdmin(updatedJob.id, updatedJob.name, "job_updated");
+    },
+    [isAdmin, user, notifyAdmin],
+  );
+
+  const deleteJob = async (id) => {
+    if (!window.confirm("Delete this job?")) return;
+    const batch = writeBatch(db);
+    batch.delete(doc(db, "jobs", id));
+    batch.delete(doc(db, "jobFinancials", id));
+    await batch.commit();
   };
 
-  const filtered = jobs
-    .filter((j) => {
-      const q = search.toLowerCase();
-      const mQ =
-        !q || j.name.toLowerCase().includes(q) || (j.phone || "").includes(q);
-      const mS = filter === "all" || j.status === filter;
-      const ds = dateField === "due" ? j.dueDate || "" : j.pickupDate || "";
-      return mQ && mS && inRange(ds, dateRange.from, dateRange.to);
-    })
-    .sort((a, b) => b.created - a.created);
+  const filtered = jobs.filter((j) => {
+    const q = search.toLowerCase();
+    const mQ =
+      !q || j.name.toLowerCase().includes(q) || (j.phone || "").includes(q);
+    const mS = filter === "all" || j.status === filter;
+    const ds = dateField === "due" ? j.dueDate || "" : j.pickupDate || "";
+    return mQ && mS && inRange(ds, dateRange.from, dateRange.to);
+  });
 
   const isFiltered = !!(dateRange.from || dateRange.to);
   const metricSet = isFiltered ? filtered : jobs;
@@ -2125,6 +1784,7 @@ function JobsPage() {
       s + (j.items || []).reduce((a, i) => a + (parseInt(i.qty) || 0), 0),
     0,
   );
+  const activeCount = metricSet.filter((j) => j.status !== "Collected").length;
 
   return (
     <div style={S.page}>
@@ -2133,15 +1793,25 @@ function JobsPage() {
           icon={ClipboardList}
           label="Total Jobs"
           value={metricSet.length}
-          sub={`${metricSet.filter((j) => j.status !== "Collected").length} active`}
+          sub={`${activeCount} active`}
         />
-        <MetricCard
-          icon={Banknote}
-          label="Revenue"
-          value={fmt(totalRev)}
-          sub={isFiltered ? "filtered period" : "all jobs"}
-          variant="blue"
-        />
+        {isAdmin ? (
+          <MetricCard
+            icon={Banknote}
+            label="Revenue"
+            value={fmt(totalRev)}
+            sub={isFiltered ? "filtered period" : "all jobs"}
+            variant="blue"
+          />
+        ) : (
+          <MetricCard
+            icon={Banknote}
+            label="Active Jobs"
+            value={activeCount}
+            sub="not yet collected"
+            variant="blue"
+          />
+        )}
         <MetricCard
           icon={Shirt}
           label="Total Pieces"
@@ -2160,9 +1830,11 @@ function JobsPage() {
 
       <div style={S.secHeader}>
         <div style={S.secTitle}>Jobs</div>
-        <button style={S.btnPrimary} onClick={() => setModal({ job: null })}>
-          <Plus size={14} /> New Job
-        </button>
+        {canEditJobs && (
+          <button style={S.btnPrimary} onClick={() => setModal({ job: null })}>
+            <Plus size={14} /> New Job
+          </button>
+        )}
       </div>
 
       <div style={S.searchWrap}>
@@ -2213,12 +1885,13 @@ function JobsPage() {
           bal <= 0 ? "paid" : j.deposit > 0 ? "partial" : "unpaid";
         const isOverdue =
           j.dueDate && j.dueDate < today() && j.status !== "Collected";
-        const profit = jobProfit(j);
+        const financials = financialsMap[j.id];
+        const profit = jobProfit(j, financials);
         const pieces = (j.items || []).reduce(
           (s, i) => s + (parseInt(i.qty) || 0),
           0,
         );
-        const extraCount = (j.extraCosts || []).length;
+        const extraCount = (financials?.extraCosts || []).length;
         const deliveredPieces = (j.items || []).reduce(
           (s, i) => s + (parseInt(i.deliveredQty) || 0),
           0,
@@ -2349,38 +2022,40 @@ function JobsPage() {
               </div>
             </div>
 
-            <div
-              style={{
-                marginTop: 10,
-                padding: "8px 12px",
-                background: profit >= 0 ? "#EAF5EE" : "#FDECEA",
-                borderRadius: 8,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              <div style={{ fontFamily: "sans-serif", fontSize: 11 }}>
-                <span style={{ color: "#6B6B6B" }}>Est. profit</span>
-                {extraCount > 0 && (
-                  <span
-                    style={{ marginLeft: 6, color: "#9B9B9B", fontSize: 10 }}
-                  >
-                    {extraCount} extra cost{extraCount > 1 ? "s" : ""}
-                  </span>
-                )}
-              </div>
-              <span
+            {isAdmin && (
+              <div
                 style={{
-                  fontFamily: "sans-serif",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  color: profit >= 0 ? "#2D7D46" : "#C0392B",
+                  marginTop: 10,
+                  padding: "8px 12px",
+                  background: profit >= 0 ? "#EAF5EE" : "#FDECEA",
+                  borderRadius: 8,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
                 }}
               >
-                {fmt(profit)}
-              </span>
-            </div>
+                <div style={{ fontFamily: "sans-serif", fontSize: 11 }}>
+                  <span style={{ color: "#6B6B6B" }}>Est. profit</span>
+                  {extraCount > 0 && (
+                    <span
+                      style={{ marginLeft: 6, color: "#9B9B9B", fontSize: 10 }}
+                    >
+                      {extraCount} extra cost{extraCount > 1 ? "s" : ""}
+                    </span>
+                  )}
+                </div>
+                <span
+                  style={{
+                    fontFamily: "sans-serif",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: profit >= 0 ? "#2D7D46" : "#C0392B",
+                  }}
+                >
+                  {fmt(profit)}
+                </span>
+              </div>
+            )}
 
             <div style={S.cardActions}>
               <button
@@ -2389,18 +2064,22 @@ function JobsPage() {
               >
                 <Eye size={12} /> View
               </button>
-              <button
-                style={{ ...S.btnPrimary, ...S.btnSm }}
-                onClick={() => setModal({ job: j })}
-              >
-                <Pencil size={12} /> Edit
-              </button>
-              <button
-                style={{ ...S.btnPrimary, ...S.btnSm, ...S.btnDanger }}
-                onClick={() => deleteJob(j.id)}
-              >
-                <Trash2 size={12} />
-              </button>
+              {canEditJobs && (
+                <button
+                  style={{ ...S.btnPrimary, ...S.btnSm }}
+                  onClick={() => setModal({ job: j })}
+                >
+                  <Pencil size={12} /> Edit
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  style={{ ...S.btnPrimary, ...S.btnSm, ...S.btnDanger }}
+                  onClick={() => deleteJob(j.id)}
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
             </div>
           </div>
         );
@@ -2409,6 +2088,7 @@ function JobsPage() {
       {modal && (
         <JobModal
           job={modal.job}
+          financials={modal.job ? financialsMap[modal.job.id] : null}
           onClose={() => setModal(null)}
           onSave={saveJob}
         />
@@ -2416,11 +2096,17 @@ function JobsPage() {
       {viewing && (
         <ViewModal
           job={viewing}
+          financials={financialsMap[viewing.id]}
+          onPrint={onPrintReceipt}
           onClose={() => setViewing(null)}
-          onEdit={() => {
-            setModal({ job: viewing });
-            setViewing(null);
-          }}
+          onEdit={
+            canEditJobs
+              ? () => {
+                  setModal({ job: viewing });
+                  setViewing(null);
+                }
+              : null
+          }
           onSave={saveJobItems}
         />
       )}
@@ -2430,26 +2116,43 @@ function JobsPage() {
 
 // ─── Profit Page ───────────────────────────────────────────────────
 function ProfitPage() {
-  const [txs, setTxs] = useState(() => {
-    const d = load(TX_KEY);
-    return d.length ? d : SEED_TX;
-  });
+  const { user, role } = useAuth();
+  const [txs, setTxs] = useState([]);
+  const [financialsList, setFinancialsList] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [dateRange, setDateRange] = useState({ from: "", to: "" });
   const [txTypeFilter, setTxType] = useState("all");
 
   useEffect(() => {
-    persist(TX_KEY, txs);
-  }, [txs]);
+    const q = query(collection(db, "transactions"), orderBy("date", "desc"));
+    return onSnapshot(q, (snap) =>
+      setTxs(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    );
+  }, []);
 
-  const saveTx = (tx) => {
-    setTxs((prev) => [tx, ...prev]);
+  useEffect(() => {
+    return onSnapshot(collection(db, "jobFinancials"), (snap) =>
+      setFinancialsList(snap.docs.map((d) => d.data())),
+    );
+  }, []);
+
+  const saveTx = async (tx) => {
+    const { id, ...txData } = tx;
+    await addDoc(collection(db, "transactions"), {
+      ...txData,
+      createdAt: serverTimestamp(),
+      createdBy: user.uid,
+    });
     setShowModal(false);
   };
-  const deleteTx = (id) => {
+  const deleteTx = async (id) => {
     if (window.confirm("Delete transaction?"))
-      setTxs((prev) => prev.filter((t) => t.id !== id));
+      await deleteDoc(doc(db, "transactions", id));
   };
+
+  // Defense in depth: the nav never offers this tab to workers, but bail
+  // out of rendering financial data even if this component is reached.
+  if (role !== "admin") return null;
 
   const filteredTxs = txs.filter(
     (t) =>
@@ -2464,9 +2167,8 @@ function ProfitPage() {
   const totalExpense = metricSet
     .filter((t) => t.type === "expense")
     .reduce((s, t) => s + t.amount, 0);
-  const jobs = load(JOBS_KEY);
-  const supplyCost = jobs.reduce(
-    (s, j) => s + (parseFloat(j.supplyCost) || 0) + totalExtraCosts(j),
+  const supplyCost = financialsList.reduce(
+    (s, f) => s + (parseFloat(f.supplyCost) || 0) + totalExtraCosts(f),
     0,
   );
 
@@ -2643,8 +2345,11 @@ function ProfitPage() {
 
 // ─── App Root ──────────────────────────────────────────────────────
 export default function App() {
+  const { user, role, active, loading, connectionError, signOutUser } = useAuth();
   const [tab, setTab] = useState("jobs");
   const [online, setOnline] = useState(navigator.onLine);
+  const [printJob, setPrintJob] = useState(null);
+  const isAdmin = role === "admin";
 
   useEffect(() => {
     const on = () => setOnline(true);
@@ -2657,16 +2362,85 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!load(JOBS_KEY).length) persist(JOBS_KEY, SEED_JOBS);
-    if (!load(TX_KEY).length) persist(TX_KEY, SEED_TX);
-  }, []);
+  if (loading) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "sans-serif",
+          color: "#6B6B6B",
+        }}
+      >
+        Loading…
+      </div>
+    );
+  }
+
+  if (user && connectionError) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "sans-serif",
+          color: "#6B6B6B",
+          padding: 20,
+          textAlign: "center",
+          gap: 12,
+        }}
+      >
+        <div style={{ color: "#C0392B", fontWeight: 600 }}>
+          Couldn't connect to the database.
+        </div>
+        <div style={{ fontSize: 13, maxWidth: 320 }}>
+          This usually means Firestore isn't set up yet in the Firebase
+          project, or your connection is unstable. Check your internet
+          connection, confirm Firestore is enabled in the Firebase Console,
+          then try again.
+        </div>
+        <button
+          onClick={() => window.location.reload()}
+          style={{ ...S.btnSave, padding: "8px 16px" }}
+        >
+          Retry
+        </button>
+        <button
+          onClick={signOutUser}
+          style={{
+            background: "none",
+            border: "none",
+            color: ACCENT,
+            cursor: "pointer",
+            fontSize: 12,
+          }}
+        >
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
+  if (!user || !active) return <Login />;
+
+  if (printJob) return <ReceiptView job={printJob} onBack={() => setPrintJob(null)} />;
+
+  const tabs = [
+    ["jobs", "Jobs"],
+    ...(isAdmin ? [["profit", "Profit"], ["workers", "Workers"]] : []),
+  ];
 
   return (
     <div style={S.app}>
       {!online && (
         <div style={S.offlineBar}>
-          <WifiOff size={13} /> Working offline — all data saved locally
+          <WifiOff size={13} /> You're offline — changes will sync once you're
+          back online
         </div>
       )}
       <nav style={S.nav}>
@@ -2676,11 +2450,8 @@ export default function App() {
             Ace Laundry<span style={S.navBrandSub}>DRY CLEAN MANAGER</span>
           </div>
         </div>
-        <div style={{ display: "flex" }}>
-          {[
-            ["jobs", "Jobs"],
-            ["profit", "Profit"],
-          ].map(([key, label]) => (
+        <div style={{ display: "flex", alignItems: "center" }}>
+          {tabs.map(([key, label]) => (
             <button
               key={key}
               style={S.navTab(tab === key)}
@@ -2689,10 +2460,27 @@ export default function App() {
               {label}
             </button>
           ))}
+          {isAdmin && <NotificationsPanel />}
+          <button
+            onClick={signOutUser}
+            title="Sign out"
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "rgba(255,255,255,0.5)",
+              padding: "0 6px 0 10px",
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            <LogOut size={15} />
+          </button>
         </div>
       </nav>
-      {tab === "jobs" && <JobsPage />}
-      {tab === "profit" && <ProfitPage />}
+      {tab === "jobs" && <JobsPage onPrintReceipt={setPrintJob} />}
+      {tab === "profit" && isAdmin && <ProfitPage />}
+      {tab === "workers" && isAdmin && <ManageWorkers />}
     </div>
   );
 }
