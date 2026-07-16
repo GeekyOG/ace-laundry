@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Shirt,
   TrendingUp,
@@ -533,6 +533,81 @@ function Badge({ status }) {
   return <span style={S.badge(status)}>{status}</span>;
 }
 
+// ─── Item Name Field (type custom or pick from catalogue) ─────────
+function ItemNameField({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const matches = ITEM_CATALOGUE.filter((c) =>
+    c.toLowerCase().includes(value.trim().toLowerCase()),
+  );
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <input
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        style={{ ...S.input, fontSize: 13, padding: "8px 10px" }}
+        placeholder="Item name"
+      />
+      {open && matches.length > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            right: 0,
+            zIndex: 20,
+            background: "#fff",
+            border: "1px solid rgba(0,0,0,0.15)",
+            borderRadius: 10,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+            maxHeight: 180,
+            overflowY: "auto",
+          }}
+        >
+          {matches.map((c) => (
+            <div
+              key={c}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onChange(c);
+                setOpen(false);
+              }}
+              style={{
+                padding: "8px 10px",
+                fontSize: 13,
+                fontFamily: "sans-serif",
+                color: "#1A1A1A",
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#F5F5F5")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "#fff")}
+            >
+              {c}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Items Editor (used in JobModal) ──────────────────────────────
 function ItemsEditor({ items, setItems }) {
   const addItem = () =>
@@ -540,7 +615,7 @@ function ItemsEditor({ items, setItems }) {
       ...prev,
       {
         id: uid(),
-        name: ITEM_CATALOGUE[0],
+        name: "",
         qty: 1,
         unitPrice: 0,
         deliveredQty: 0,
@@ -636,15 +711,10 @@ function ItemsEditor({ items, setItems }) {
                 marginBottom: 3,
               }}
             >
-              <select
+              <ItemNameField
                 value={it.name}
-                onChange={(e) => updateItem(it.id, "name", e.target.value)}
-                style={{ ...S.select, fontSize: 13, padding: "8px 10px" }}
-              >
-                {ITEM_CATALOGUE.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
+                onChange={(v) => updateItem(it.id, "name", v)}
+              />
               <input
                 type="number"
                 min="1"
