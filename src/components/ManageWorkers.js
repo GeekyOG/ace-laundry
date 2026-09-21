@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { UserPlus, Users } from "lucide-react";
+import { Trash2, UserPlus, Users } from "lucide-react";
 import {
   collection,
+  deleteDoc,
   doc,
   onSnapshot,
   query,
@@ -56,6 +57,16 @@ export default function ManageWorkers() {
 
   const toggle = (uid, field, current) =>
     updateDoc(doc(db, "users", uid), { [field]: !current });
+
+  const removeWorker = async (uid, email) => {
+    if (
+      !window.confirm(
+        `Permanently delete ${email}? This removes their account access and cannot be undone.`,
+      )
+    )
+      return;
+    await deleteDoc(doc(db, "users", uid));
+  };
 
   return (
     <div style={S.page}>
@@ -157,8 +168,42 @@ export default function ManageWorkers() {
 
       {workers.map((w) => (
         <div key={w.uid} style={S.card}>
-          <div style={S.cardName}>{w.email}</div>
-          <div style={S.cardSub}>{w.active ? "Active" : "Deactivated"}</div>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <div>
+              <div style={S.cardName}>{w.email}</div>
+              <div style={S.cardSub}>
+                {w.active ? "Active" : "Deactivated"}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => removeWorker(w.uid, w.email)}
+              title="Delete worker"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                background: "#FDECEA",
+                color: "#C0392B",
+                border: "none",
+                borderRadius: 8,
+                padding: "6px 10px",
+                fontFamily: "sans-serif",
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              <Trash2 size={12} /> Delete
+            </button>
+          </div>
           <div
             style={{
               display: "flex",

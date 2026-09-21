@@ -1855,6 +1855,9 @@ function JobsPage({ onPrintReceipt }) {
     0,
   );
   const activeCount = metricSet.filter((j) => j.status !== "Collected").length;
+  const overdueCount = metricSet.filter(
+    (j) => j.dueDate && j.dueDate < today() && j.status !== "Collected",
+  ).length;
 
   return (
     <div style={S.page}>
@@ -1889,13 +1892,23 @@ function JobsPage({ onPrintReceipt }) {
           sub="items in period"
           variant="green"
         />
-        <MetricCard
-          icon={AlertCircle}
-          label="Outstanding"
-          value={fmt(totalBal)}
-          sub="balance due"
-          variant="danger"
-        />
+        {isAdmin ? (
+          <MetricCard
+            icon={AlertCircle}
+            label="Outstanding"
+            value={fmt(totalBal)}
+            sub="balance due"
+            variant="danger"
+          />
+        ) : (
+          <MetricCard
+            icon={AlertCircle}
+            label="Overdue"
+            value={overdueCount}
+            sub="past ready-by date"
+            variant="danger"
+          />
+        )}
       </div>
 
       <div style={S.secHeader}>
